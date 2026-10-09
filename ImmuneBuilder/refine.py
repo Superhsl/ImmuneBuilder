@@ -3,6 +3,7 @@ import os
 import numpy as np
 from openmm import app, LangevinIntegrator, CustomExternalForce, CustomTorsionForce, OpenMMException, Platform, unit
 from scipy import spatial
+from ImmuneBuilder.device_utils import resolve_openmm_platform
 import logging
 logging.disable()
 
@@ -152,12 +153,17 @@ def minimize_energy(topology, positions, k1=2.5, k2=2.5, n_threads=-1):
     integrator = LangevinIntegrator(0, 0.01, 0.0)
 
     # Set up the simulation
+    # SDAA 适配：平台改为按可用性解析（auto: CUDA -> CPU -> SDAA -> Reference），
+    # 并把解析提到分支之外、在两个分支都显式传入，使 IMMUNEBUILDER_OPENMM_PLATFORM
+    # 在 n_threads<=0 时同样生效（上游此时不传平台，交由 OpenMM 自选，无法受控）。
+    platform = resolve_openmm_platform()
     if n_threads > 0:
         # Set number of threads used by OpenMM
-        platform = Platform.getPlatformByName('CPU')
-        simulation = app.Simulation(modeller.topology, system, integrator, platform, {'Threads': str(n_threads)})
+        # 'Threads' 属性只被 CPU 平台识别，仅在该平台上传递。
+        simulation = app.Simulation(modeller.topology, system, integrator, platform,
+                                    {'Threads': str(n_threads)} if platform.getName() == "CPU" else {})
     else:
-        simulation = app.Simulation(modeller.topology, system, integrator)
+        simulation = app.Simulation(modeller.topology, system, integrator, platform)
     simulation.context.setPositions(modeller.positions)
 
     # Minimize the energy
@@ -340,12 +346,17 @@ def strained_sidechain_bonds_fixer(strained_residues, topology, positions, n_thr
     integrator = LangevinIntegrator(0, 0.01, 0.0)
 
     # Set up the simulation
+    # SDAA 适配：平台改为按可用性解析（auto: CUDA -> CPU -> SDAA -> Reference），
+    # 并把解析提到分支之外、在两个分支都显式传入，使 IMMUNEBUILDER_OPENMM_PLATFORM
+    # 在 n_threads<=0 时同样生效（上游此时不传平台，交由 OpenMM 自选，无法受控）。
+    platform = resolve_openmm_platform()
     if n_threads > 0:
         # Set number of threads used by OpenMM
-        platform = Platform.getPlatformByName('CPU')
-        simulation = app.Simulation(modeller.topology, system, integrator, platform, {'Threads', str(n_threads)})
+        # 'Threads' 属性只被 CPU 平台识别，仅在该平台上传递。
+        simulation = app.Simulation(modeller.topology, system, integrator, platform,
+                                    {'Threads': str(n_threads)} if platform.getName() == "CPU" else {})
     else:
-        simulation = app.Simulation(modeller.topology, system, integrator)    
+        simulation = app.Simulation(modeller.topology, system, integrator, platform)
     simulation.context.setPositions(modeller.positions)
 
     # Minimize the energy

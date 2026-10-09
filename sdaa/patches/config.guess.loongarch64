@@ -1,0 +1,13 @@
+#!/bin/sh
+# 最小 config.guess —— ImmuneBuilder SDAA 迁移专用
+#
+# 背景：HMMER 3.4 附带的 config.guess 版本为 2018-03-08，不认识 loongarch64，
+# 直接运行会输出 "unable to guess system type" 并导致 configure 失败。
+# GNU 官方最新的 config.guess / config.sub 在本机不可达（savannah、GitHub 均超时），
+# 而 HMMER 自带的 config.sub 已经接受 loongarch64-unknown-linux-gnu 三元组
+# （实测：./config.sub loongarch64-unknown-linux-gnu -> loongarch64-unknown-linux-gnu）。
+#
+# 因此这里只替换 config.guess，直接输出已被 config.sub 接受的三元组。
+# 注意：仅用于本迁移的构建环境，不会污染系统。
+echo "loongarch64-unknown-linux-gnu"
+exit 0

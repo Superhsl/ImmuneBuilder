@@ -1,0 +1,88 @@
+name: ${COMPOSE_PROJECT_NAME:-immunebuilder-sdaa}
+
+# ImmuneBuilder 龙芯 SDAA 运行环境（与 CUDA 基线 compose.cuda.yaml 完全独立）
+#
+# 与 CUDA 基线的差异：
+#   * 无 `gpus: all`（NVIDIA 专有），改为 devices 直接映射 /dev/tcaicard*
+#   * OpenMM 8.6（含 SDAA 平台）以只读方式从宿主复用，不重复构建
+#   * 增加 SDAA_VISIBLE_DEVICES / IMMUNEBUILDER_DEVICE / OPENMM_PLATFORM
+#   * 挂载策略：源码只读、权重只读、只有 work/ 可写
+#       ${ROOT} -> /workspace/repro :ro        ${ROOT}/work -> /workspace/repro/work :rw
+#       ./weights -> /weights :ro
+#     容器工作目录设为 /workspace/repro/work：上游 refine.py 会往进程当前目录写临时文件，
+#     源码只读时必须让 CWD 落在可写目录。
+#     权重只读的代价：官方首次下载写不进 /weights，请先用
+#     scripts/prewarm-weights-sdaa.sh 预热一次（临时 :rw），之后全程只读、可离线。
+
+services:
+  immunebuilder-sdaa:
+    build:
+      context: .
+      dockerfile: Dockerfile.sdaa
+      args:
+        BASE_IMAGE: "${BASE_IMAGE:-lasermpnn-sdaa321-loong:torch2.12.0-sdaa3.2.1-py312}"
+        HOST_UID: "${HOST_UID:-1006}"
+        HOST_GID: "${HOST_GID:-1006}"
+        HMMER_SHA256: "${HMMER_SHA256:-UNSET}"
+    image: ${IMAGE_NAME:-immunebuilder-sdaa:torch2.12.0-sdaa3.2.1-py312}
+    container_name: ${CONTAINER_NAME:-immunebuilder-sdaa}
+    init: true
+    user: "${HOST_UID:-1006}:${HOST_GID:-1006}"
+    working_dir: /workspace/repro/work
+    shm_size: "2gb"
+    environment:
+      HOME: /home/immunebuilder
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONPATH: /opt/openmm-py:/workspace/repro
+      SDAA_VISIBLE_DEVICES: "${SDAA_VISIBLE_DEVICES:-0}"
+      SDAA_HOME: /opt/tecoai
+      # 神经网络设备选择：auto | cpu | sdaa | cuda（auto: CUDA -> SDAA -> CPU）
+      IMMUNEBUILDER_DEVICE: "${IMMUNEBUILDER_DEVICE:-auto}"
+      # OpenMM 精修平台：auto | CPU | SDAA | Reference
+      # auto 顺序为 CUDA -> CPU -> SDAA -> Reference，即龙芯上默认落在 CPU。
+      # SDAA 为可选加速路径，需显式指定并同时给出 SDAA 专有属性。
+      IMMUNEBUILDER_OPENMM_PLATFORM: "${IMMUNEBUILDER_OPENMM_PLATFORM:-CPU}"
+      # SDAA 专有属性（仅 platform=SDAA 时可用）；默认留空
+      IMMUNEBUILDER_OPENMM_PROPERTIES: "${IMMUNEBUILDER_OPENMM_PROPERTIES:-}"
+      # CPU 精修线程数（CPU 平台以此作为 Threads 默认值）。
+      # 实测本机 4 NUMA 节点下 32 线程优于 64/128
+      OPENMM_CPU_THREADS: "${OPENMM_CPU_THREADS:-32}"
+      LD_LIBRARY_PATH: /opt/openmm/lib:/opt/openmm/lib/plugins:/opt/tecoai/lib64:/usr/local/lib:/usr/local/python/lib
+      OPENMM_PLUGIN_DIR: /opt/openmm/lib/plugins
+      XDG_CACHE_HOME: /tmp/.cache
+      MPLCONFIGDIR: /tmp/matplotlib
+      # SDAA 运行期 JIT 编译临时产物（scpp 等）落到工作区，便于复用与排查
+      TMPDIR: /workspace/sdaa-cache
+    devices:
+      - "${SDAA_DEVICE_NODE:-/dev/tcaicard0}:/dev/tcaicard0:rwm"
+    volumes:
+      # 源码/脚本/输入：只读
+      - type: bind
+        source: .
+        target: /workspace/repro
+        read_only: true
+      # 唯一可写输出目录（覆盖上面那一层只读挂载）
+      - type: bind
+        source: ./work
+        target: /workspace/repro/work
+        read_only: false
+      # 权重：只读。首次请用 scripts/prewarm-weights-sdaa.sh 预热（官方下载需 :rw）
+      - type: bind
+        source: ./weights
+        target: /weights
+        read_only: true
+      # 复用已编译的 OpenMM（当前 v2：CPU + SDAA）——只读
+      - type: bind
+        source: "${OPENMM_INSTALL:?set OPENMM_INSTALL, e.g. /path/to/Openmm-sdaa-v2/work-v2/install}"
+        target: /opt/openmm
+        read_only: true
+      - type: bind
+        source: "${OPENMM_SITE_PACKAGES:?set OPENMM_SITE_PACKAGES, the sibling venv site-packages}"
+        target: /opt/openmm-py
+        read_only: true
+      # SDAA 运行期 JIT 产物落到工作区，保持宿主缓存可复用
+      - type: bind
+        source: ./work/sdaa-cache
+        target: /workspace/sdaa-cache
+    command: ["sleep", "infinity"]

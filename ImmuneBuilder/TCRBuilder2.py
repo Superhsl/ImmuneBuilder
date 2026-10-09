@@ -3,6 +3,7 @@ import numpy as np
 import os
 import sys
 import argparse
+from ImmuneBuilder.device_utils import resolve_device, seed_all
 from ImmuneBuilder.models import StructureModule
 from ImmuneBuilder.util import get_encoding, to_pdb, find_alignment_transform, download_file, sequence_dict_from_fasta, add_errors_as_bfactors, are_weights_ready
 from ImmuneBuilder.refine import refine
@@ -96,7 +97,7 @@ class TCR:
 
 class TCRBuilder2:
     def __init__(self, model_ids = [1,2,3,4], weights_dir=None, numbering_scheme='imgt', use_TCRBuilder2_PLUS_weights=True):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = resolve_device()
         self.scheme = numbering_scheme
         self.use_TCRBuilder2_PLUS_weights = use_TCRBuilder2_PLUS_weights
         if weights_dir is None:
@@ -176,7 +177,12 @@ def command_line_interface():
     parser.add_argument("-v", "--verbose", help="Verbose output", default=False, action="store_true")
     parser.add_argument("-og", "--original_weights", help="use original TCRBuilder2 weights instead of TCRBuilder2+", default=False, action="store_true")
 
+    parser.add_argument("--seed", help="Fix the random seed for reproducible CPU/SDAA comparison runs.", type=int, default=None)
+
     args = parser.parse_args()
+
+    if args.seed is not None:
+        seed_all(args.seed)
 
     if (args.beta_sequence is not None) and (args.alpha_sequence is not None):
         seqs = {"B":args.beta_sequence, "A":args.alpha_sequence}

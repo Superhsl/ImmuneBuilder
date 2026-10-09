@@ -3,6 +3,7 @@ import numpy as np
 import os
 import sys
 import argparse
+from ImmuneBuilder.device_utils import resolve_device, seed_all
 from ImmuneBuilder.models import StructureModule
 from ImmuneBuilder.util import get_encoding, to_pdb, find_alignment_transform, download_file, sequence_dict_from_fasta, add_errors_as_bfactors, are_weights_ready
 from ImmuneBuilder.refine import refine
@@ -85,7 +86,7 @@ class Antibody:
 
 class ABodyBuilder2:
     def __init__(self, model_ids = [1,2,3,4], weights_dir=None, numbering_scheme = 'imgt'):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = resolve_device()
         self.scheme =  numbering_scheme
 
         if weights_dir is None:
@@ -149,7 +150,12 @@ def command_line_interface():
     parser.add_argument("--n_threads", help="The number of CPU threads to be used. If this option is set, refinement will be performed on CPU instead of GPU. By default, all available cores will be used.", type=int, default=-1)
     parser.add_argument("-u", "--no_sidechain_bond_check", help="Don't check for strained bonds. This is a bit faster but will rarely generate unphysical side chains", default=False, action="store_true")
     parser.add_argument("-v", "--verbose", help="Verbose output", default=False, action="store_true")
+    parser.add_argument("--seed", help="Fix the random seed for reproducible CPU/SDAA comparison runs.", type=int, default=None)
+
     args = parser.parse_args()
+
+    if args.seed is not None:
+        seed_all(args.seed)
 
     if (args.heavy_sequence is not None) and (args.light_sequence is not None):
         seqs = {"H":args.heavy_sequence, "L":args.light_sequence}

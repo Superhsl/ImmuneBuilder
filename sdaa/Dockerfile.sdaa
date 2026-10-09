@@ -1,0 +1,154 @@
+# ImmuneBuilder SDAA (LoongArch64) 运行时镜像
+#
+# 设计原则（与 CUDA 基线完全隔离）：
+#   * 基础镜像沿用任务指定的 lasermpnn-sdaa321-loong:torch2.12.0-sdaa3.2.1-py312，
+#     其 Image ID 由 scripts/build-image.sh 在构建前强制校验。
+#   * CUDA 基线文件（Dockerfile.cuda / compose.cuda.yaml / .env）不被修改。
+#   * 只新增本文件与 compose.sdaa.yaml，使用独立镜像标签。
+#
+# 关键约束与已解决的问题（详见 SDAA_MIGRATION.md）：
+#   1. 基础镜像内置 PIP_NO_INDEX=1，所有联网 pip 安装必须显式覆盖。
+#   2. openmm / pdbfixer / anarci / hmmer 在 loongarch64 上都没有现成 wheel：
+#      - openmm  : 复用已编译好的 OpenMM 8.6（含 SDAA 平台），运行期只读挂载
+#      - anarci  : PyPI 纯 Python wheel（自带 ALL.hmm 数据）
+#      - pdbfixer: PyPI 源码安装
+#      - hmmer   : HMMER 3.4 只支持 SSE/NEON/VMX，无标量回退，LoongArch 无法原生编译；
+#                  改用 Debian amd64 HMMER + qemu-x86_64（见下方第 3 步与文档）
+#   3. libOpenMMSDAA.so 依赖 libtecofft.so，基础镜像未安装该 RPM，缺它会导致
+#      SDAA 平台插件静默加载失败（只剩 Reference 平台）。必须安装 tecofft RPM。
+#      注意：tecofft 必须与所用的 OpenMM 构建配套 —— v1 与 v2 是两个不同的
+#      tecofft 构建（sha256 不同），换 OpenMM 版本时必须同步换 tecofft。
+#
+# 当前接入的 OpenMM 构建：Openmm-sdaa-v2（CPU + SDAA 全功能）
+#   OPENMM_BUILD_CPU_LIB=ON，平台 ['Reference','CPU','SDAA']，
+#   SDAA 通过 NEEDED 链接 libOpenMMCPU.so（USE_CPU_DIRECT=1，可用 UseCpuDirect 属性）。
+
+ARG BASE_IMAGE=lasermpnn-sdaa321-loong:torch2.12.0-sdaa3.2.1-py312
+FROM ${BASE_IMAGE}
+
+USER root
+
+ARG HOST_UID=1000
+ARG HOST_GID=1000
+
+# ---- 1. SDAA 运行时补齐：tecofft（libOpenMMSDAA.so 的硬依赖） ----
+# sha256 必须与所用 OpenMM 构建配套：
+#   v2 (当前) 46a2c6213e6bb2c23a17cc2e514ae7635213fdc19bfea3be620a9e4dc1327847 (43192 B)
+#   v1 (旧)   88a3674c4b4ce451a8ef47cda92a56acd1147ecb2fa15c7a72b38cf72a819e90 (31754 B)
+COPY downloads/tecofft-0.1.0-1.loongarch64.rpm /tmp/sdaa-rpms/tecofft-0.1.0-1.loongarch64.rpm
+ARG TECOFFT_SHA256=46a2c6213e6bb2c23a17cc2e514ae7635213fdc19bfea3be620a9e4dc1327847
+RUN printf '%s  %s\n' "${TECOFFT_SHA256}" /tmp/sdaa-rpms/tecofft-0.1.0-1.loongarch64.rpm \
+      | sha256sum -c - \
+    && rpm -ivh /tmp/sdaa-rpms/tecofft-0.1.0-1.loongarch64.rpm \
+    && rm -rf /tmp/sdaa-rpms \
+    && rpm -q tecofft \
+    && test -f /opt/tecoai/lib64/libtecofft.so
+
+# ---- 2. Python 3.12 独立 venv（复用基础镜像的 torch / torch_sdaa / biopython） ----
+# 复用机制必须与基础镜像自身的做法一致：
+#   基础 venv 的 site-packages 里有一个 `sdaa321-base-runtime.pth`，内容是
+#       /home/py312/lib/python3.12/site-packages
+#   也就是说 torch / torch_sdaa / biopython / numpy / scipy / einops 等
+#   **实际都装在 `/home/py312/...`**，靠这个 .pth 暴露出来。
+#   踩过的坑：
+#     (a) 普通 `python -m venv` 不会处理**父 venv** 目录里的 .pth，torch 不可见；
+#     (b) `--system-site-packages` 只暴露 `/usr/local/python`（那里几乎没东西）；
+#     (c) 正确做法：把同样的 .pth 复制到新 venv 自己的 site-packages 里。
+#   （实测：复制该 .pth 后新 venv 可直接 `import torch, torch_sdaa, Bio`。）
+ENV SDAA_VENV=/opt/venvs/immunebuilder-sdaa-py312 \
+    BASE_VENV=/opt/venvs/lasermpnn-sdaa321-py312
+RUN "${BASE_VENV}/bin/python" -m venv --without-pip "${SDAA_VENV}" \
+    && cp -f "${BASE_VENV}/lib/python3.12/site-packages/sdaa321-base-runtime.pth" \
+             "${SDAA_VENV}/lib/python3.12/site-packages/" \
+    && "${SDAA_VENV}/bin/python" -m ensurepip --upgrade \
+    && "${SDAA_VENV}/bin/python" -c "import torch, torch_sdaa, Bio, numpy, scipy, einops; print('inherited:', torch.__version__, torch_sdaa.__version__, Bio.__version__, numpy.__version__, scipy.__version__)" \
+    && PIP_NO_INDEX=0 "${SDAA_VENV}/bin/python" -m pip install --no-cache-dir \
+         --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+         --trusted-host pypi.tuna.tsinghua.edu.cn \
+         --upgrade pip setuptools wheel \
+    && PIP_NO_INDEX=0 "${SDAA_VENV}/bin/python" -m pip install --no-cache-dir \
+         --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+         --trusted-host pypi.tuna.tsinghua.edu.cn \
+         --timeout 120 --retries 5 \
+         --no-deps "anarci==2026.2.13.2" \
+    && PIP_NO_INDEX=0 "${SDAA_VENV}/bin/python" -m pip install --no-cache-dir \
+         --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+         --trusted-host pypi.tuna.tsinghua.edu.cn \
+         --timeout 120 --retries 5 \
+         --no-deps "pdbfixer==1.12.0" \
+    && "${SDAA_VENV}/bin/python" -m pip freeze > /opt/immunebuilder-sdaa-pip-freeze.txt
+# 依赖自检（脚本方式，避免在 RUN 中嵌套 heredoc）
+COPY scripts/check-deps.py /opt/check-deps.py
+RUN "${SDAA_VENV}/bin/python" /opt/check-deps.py
+
+# ---- 3. HMMER：ANARCI 运行期必需 hmmscan ----
+# 为什么不是原生编译：
+#   HMMER 3.4 的 configure 强制要求 SSE / NEON / VMX 之一（源码无标量回退路径），
+#   而 LoongArch 提供的是 LSX/LASX，且 GCC 12 不提供 SSE 内联函数兼容层
+#   （实测 `-msse2` 不被识别、emmintrin.h 不存在）。原生移植需要把
+#   src/impl_sse/* 与 easel/esl_sse.h 中约 60 个 _mm_* 内联函数重写到 LSX 内联函数，
+#   属于大型工程，列为后续优化项。
+#   故采用 Debian amd64 的 HMMER 3.4，经 qemu-x86_64 用户态仿真运行——龙芯 CPU
+#   本身具备 x86 二进制翻译能力（/proc/cpuinfo 含 lbt_x86）。
+#   二进制来源与 sha256 记录在 downloads/hmmer-x86/SOURCES.sha256 与 qemu/。
+COPY downloads/hmmer-x86 /opt/hmmer-x86
+RUN set -eux; \
+    test -x /opt/hmmer-x86/qemu/qemu-x86_64; \
+    test -f /opt/hmmer-x86/sysroot/usr/lib/x86_64-linux-gnu/libc.so.6; \
+    test -e /opt/hmmer-x86/sysroot/lib64/ld-linux-x86-64.so.2; \
+    printf '%s\n' \
+      '#!/bin/sh' \
+      '# ANARCI 通过 PATH 查找 hmmscan；这里转发到静态链接的 qemu-x86_64。' \
+      '# 说明见 SDAA_MIGRATION.md「重大问题记录：HMMER 无法在 LoongArch 原生编译」。' \
+      'export QEMU_LD_PREFIX=/opt/hmmer-x86/sysroot' \
+      'exec /opt/hmmer-x86/qemu/qemu-x86_64 /opt/hmmer-x86/usr/bin/hmmscan "$@"' \
+      > /usr/local/bin/hmmscan; \
+    for b in hmmbuild hmmsearch hmmpress hmmfetch hmmalign hmmstat; do \
+      printf '%s\n' \
+        '#!/bin/sh' \
+        'export QEMU_LD_PREFIX=/opt/hmmer-x86/sysroot' \
+        "exec /opt/hmmer-x86/qemu/qemu-x86_64 /opt/hmmer-x86/usr/bin/$b \"\$@\"" \
+        > "/usr/local/bin/$b"; \
+    done; \
+    chmod 0755 /usr/local/bin/hmm*; \
+    hmmscan -h >/dev/null; \
+    echo "hmmer (amd64 via qemu) OK: $(hmmscan -h | sed -n 2p)"
+
+# ---- 4. ImmuneBuilder 源码安装（官方 commit 锁定，权重走只读挂载） ----
+COPY ImmuneBuilder /opt/immunebuilder-source
+RUN "${SDAA_VENV}/bin/python" -m pip install --no-cache-dir --no-deps --no-build-isolation \
+        /opt/immunebuilder-source \
+    && rm -rf "${SDAA_VENV}/lib/python3.12/site-packages/ImmuneBuilder/trained_model" \
+    && ln -s /weights "${SDAA_VENV}/lib/python3.12/site-packages/ImmuneBuilder/trained_model"
+
+# ---- 5. 用户映射（固定宿主机 UID/GID，避免产出 root 属主文件） ----
+RUN if ! getent group "${HOST_GID}" >/dev/null; then groupadd --gid "${HOST_GID}" immunebuilder; fi \
+    && if ! getent passwd "${HOST_UID}" >/dev/null; then \
+         useradd --uid "${HOST_UID}" --gid "${HOST_GID}" --create-home --shell /bin/bash immunebuilder; \
+       fi \
+    && mkdir -p /workspace/repro /home/immunebuilder \
+    && chown -R "${HOST_UID}:${HOST_GID}" /workspace/repro /home/immunebuilder
+
+ENV PATH=${SDAA_VENV}/bin:/usr/local/bin:/opt/tecoai/bin:${PATH} \
+    LD_LIBRARY_PATH=/opt/openmm/lib:/opt/tecoai/lib64:/usr/local/lib:/usr/local/python/lib \
+    OPENMM_PLUGIN_DIR=/opt/openmm/lib/plugins \
+    PYTHONPATH=/opt/openmm-py:/workspace/repro \
+    SDAA_HOME=/opt/tecoai \
+    VIRTUAL_ENV=${SDAA_VENV} \
+    HOME=/home/immunebuilder \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN python -c "import sys; print(sys.version)" \
+    && hmmscan -h >/dev/null && echo "hmmscan OK" \
+    && python -c "import anarci; print('anarci OK')" \
+    && python -c "import torch_sdaa; print('torch_sdaa', torch_sdaa.__version__)" \
+    && python -c "import torch; print('torch', torch.__version__, 'cuda_avail', torch.cuda.is_available(), 'sdaa_avail', torch.sdaa.is_available())" \
+    && echo "NOTE: pdbfixer/openmm/ImmuneBuilder 的完整校验在运行期执行：" \
+    && echo "      scripts/verify-environment-sdaa.sh（OpenMM 以只读方式挂载后才可用）"
+
+WORKDIR /workspace/repro
+USER ${HOST_UID}:${HOST_GID}
+
+CMD ["sleep", "infinity"]

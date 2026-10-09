@@ -1,0 +1,14 @@
+# 复用的 OpenMM 构建指纹
+# 该依赖**没有 loongarch64 wheel**，以预编译前缀（install + venv）只读挂载进容器。
+# 关键构建开关：OPENMM_BUILD_CPU_LIB=ON → 平台列表 Reference,CPU,SDAA；
+#              libOpenMMSDAA.so 的 NEEDED 含 libOpenMMCPU.so（USE_CPU_DIRECT=1）。
+#
+# sha256                                                            size      file
+f12e1bb35285da3630e9dafa7d300ffa1afd16980abeb3e6bacc93ab62167a1c     4857192  libOpenMM.so
+a734023c060b8ec193bf6c6eef34172454db480217f465530d8cd031ffcfc3ef      765384  libOpenMMCPU.so
+80cc211e68b29303af6ac0cc429950cbdffe67c43de3738c7da876cb66b9e373     3704048  libOpenMMSDAA.so
+d1c60bfacea0b16dc2db532d2bc1bcafc610a5c44d6ba7a20e8728886d43c832      297000  libOpenMMPME.so
+8429573d70d1c640ec0d46de766b6b36e41a0325373b069dac1693f298e35bda    26043224  _openmm.cpython-312-loongarch64-linux-gnu.so
+
+# 最后一项 libtecofft.so 由基础镜像提供（tecofft RPM 安装）；
+# 其余由 OpenMM v2 构建产出。

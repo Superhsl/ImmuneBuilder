@@ -1,0 +1,169 @@
+# 本次 龙芯/SDAA 适配的完整补丁
+#
+# 生成方式：git -C ImmuneBuilder diff
+# 基线 commit：0df4e2ad82a1aa60f37ea9dae335d1198159ef78
+#
+# 本 diff 含 3 个 builder + refine.py 的改动（+38/-9）。
+# 新增文件 ImmuneBuilder/device_utils.py 不在 diff 中，见同目录 device_utils.py。
+#
+# 应用方式（推荐）：python3 apply-sdaa-patch.py --apply
+# 或直接：git apply sdaa-adaptation.diff && cp device_utils.py <repo>/ImmuneBuilder/
+diff --git a/ImmuneBuilder/ABodyBuilder2.py b/ImmuneBuilder/ABodyBuilder2.py
+index 80c58ce..c8ddb2e 100644
+--- a/ImmuneBuilder/ABodyBuilder2.py
++++ b/ImmuneBuilder/ABodyBuilder2.py
+@@ -3,6 +3,7 @@ import numpy as np
+ import os
+ import sys
+ import argparse
++from ImmuneBuilder.device_utils import resolve_device, seed_all
+ from ImmuneBuilder.models import StructureModule
+ from ImmuneBuilder.util import get_encoding, to_pdb, find_alignment_transform, download_file, sequence_dict_from_fasta, add_errors_as_bfactors, are_weights_ready
+ from ImmuneBuilder.refine import refine
+@@ -85,7 +86,7 @@ class Antibody:
+ 
+ class ABodyBuilder2:
+     def __init__(self, model_ids = [1,2,3,4], weights_dir=None, numbering_scheme = 'imgt'):
+-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
++        self.device = resolve_device()
+         self.scheme =  numbering_scheme
+ 
+         if weights_dir is None:
+@@ -149,8 +150,13 @@ def command_line_interface():
+     parser.add_argument("--n_threads", help="The number of CPU threads to be used. If this option is set, refinement will be performed on CPU instead of GPU. By default, all available cores will be used.", type=int, default=-1)
+     parser.add_argument("-u", "--no_sidechain_bond_check", help="Don't check for strained bonds. This is a bit faster but will rarely generate unphysical side chains", default=False, action="store_true")
+     parser.add_argument("-v", "--verbose", help="Verbose output", default=False, action="store_true")
++    parser.add_argument("--seed", help="Fix the random seed for reproducible CPU/SDAA comparison runs.", type=int, default=None)
++
+     args = parser.parse_args()
+ 
++    if args.seed is not None:
++        seed_all(args.seed)
++
+     if (args.heavy_sequence is not None) and (args.light_sequence is not None):
+         seqs = {"H":args.heavy_sequence, "L":args.light_sequence}
+     elif args.fasta_file is not None:
+diff --git a/ImmuneBuilder/NanoBodyBuilder2.py b/ImmuneBuilder/NanoBodyBuilder2.py
+index e836276..c2771a7 100644
+--- a/ImmuneBuilder/NanoBodyBuilder2.py
++++ b/ImmuneBuilder/NanoBodyBuilder2.py
+@@ -3,6 +3,7 @@ import numpy as np
+ import os
+ import argparse
+ import sys
++from ImmuneBuilder.device_utils import resolve_device, seed_all
+ from ImmuneBuilder.models import StructureModule
+ from ImmuneBuilder.util import get_encoding, to_pdb, find_alignment_transform, download_file, sequence_dict_from_fasta, add_errors_as_bfactors, are_weights_ready
+ from ImmuneBuilder.refine import refine
+@@ -86,7 +87,7 @@ class Nanobody:
+ 
+ class NanoBodyBuilder2:
+     def __init__(self, model_ids = [1,2,3,4], weights_dir=None, numbering_scheme='imgt'):
+-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
++        self.device = resolve_device()
+         self.scheme = numbering_scheme
+         if weights_dir is None:
+             weights_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "trained_model")
+@@ -154,8 +155,13 @@ def command_line_interface():
+     parser.add_argument("-u", "--no_sidechain_bond_check", help="Don't check for strained bonds. This is a bit faster but will rarely generate unphysical side chains", default=False, action="store_true")
+     parser.add_argument("-v", "--verbose", help="Verbose output", default=False, action="store_true")
+ 
++    parser.add_argument("--seed", help="Fix the random seed for reproducible CPU/SDAA comparison runs.", type=int, default=None)
++
+     args = parser.parse_args()
+ 
++    if args.seed is not None:
++        seed_all(args.seed)
++
+     if args.heavy_sequence is not None:
+         seqs = {"H":args.heavy_sequence}
+     elif args.fasta_file is not None:
+diff --git a/ImmuneBuilder/TCRBuilder2.py b/ImmuneBuilder/TCRBuilder2.py
+index df9284e..b0e97ec 100644
+--- a/ImmuneBuilder/TCRBuilder2.py
++++ b/ImmuneBuilder/TCRBuilder2.py
+@@ -3,6 +3,7 @@ import numpy as np
+ import os
+ import sys
+ import argparse
++from ImmuneBuilder.device_utils import resolve_device, seed_all
+ from ImmuneBuilder.models import StructureModule
+ from ImmuneBuilder.util import get_encoding, to_pdb, find_alignment_transform, download_file, sequence_dict_from_fasta, add_errors_as_bfactors, are_weights_ready
+ from ImmuneBuilder.refine import refine
+@@ -96,7 +97,7 @@ class TCR:
+ 
+ class TCRBuilder2:
+     def __init__(self, model_ids = [1,2,3,4], weights_dir=None, numbering_scheme='imgt', use_TCRBuilder2_PLUS_weights=True):
+-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
++        self.device = resolve_device()
+         self.scheme = numbering_scheme
+         self.use_TCRBuilder2_PLUS_weights = use_TCRBuilder2_PLUS_weights
+         if weights_dir is None:
+@@ -176,8 +177,13 @@ def command_line_interface():
+     parser.add_argument("-v", "--verbose", help="Verbose output", default=False, action="store_true")
+     parser.add_argument("-og", "--original_weights", help="use original TCRBuilder2 weights instead of TCRBuilder2+", default=False, action="store_true")
+ 
++    parser.add_argument("--seed", help="Fix the random seed for reproducible CPU/SDAA comparison runs.", type=int, default=None)
++
+     args = parser.parse_args()
+ 
++    if args.seed is not None:
++        seed_all(args.seed)
++
+     if (args.beta_sequence is not None) and (args.alpha_sequence is not None):
+         seqs = {"B":args.beta_sequence, "A":args.alpha_sequence}
+     elif args.fasta_file is not None:
+diff --git a/ImmuneBuilder/refine.py b/ImmuneBuilder/refine.py
+index 67d93db..7f936af 100644
+--- a/ImmuneBuilder/refine.py
++++ b/ImmuneBuilder/refine.py
+@@ -3,6 +3,7 @@ import os
+ import numpy as np
+ from openmm import app, LangevinIntegrator, CustomExternalForce, CustomTorsionForce, OpenMMException, Platform, unit
+ from scipy import spatial
++from ImmuneBuilder.device_utils import resolve_openmm_platform
+ import logging
+ logging.disable()
+ 
+@@ -152,12 +153,17 @@ def minimize_energy(topology, positions, k1=2.5, k2=2.5, n_threads=-1):
+     integrator = LangevinIntegrator(0, 0.01, 0.0)
+ 
+     # Set up the simulation
++    # SDAA 适配：平台改为按可用性解析（auto: CUDA -> CPU -> SDAA -> Reference），
++    # 并把解析提到分支之外、在两个分支都显式传入，使 IMMUNEBUILDER_OPENMM_PLATFORM
++    # 在 n_threads<=0 时同样生效（上游此时不传平台，交由 OpenMM 自选，无法受控）。
++    platform = resolve_openmm_platform()
+     if n_threads > 0:
+         # Set number of threads used by OpenMM
+-        platform = Platform.getPlatformByName('CPU')
+-        simulation = app.Simulation(modeller.topology, system, integrator, platform, {'Threads': str(n_threads)})
++        # 'Threads' 属性只被 CPU 平台识别，仅在该平台上传递。
++        simulation = app.Simulation(modeller.topology, system, integrator, platform,
++                                    {'Threads': str(n_threads)} if platform.getName() == "CPU" else {})
+     else:
+-        simulation = app.Simulation(modeller.topology, system, integrator)
++        simulation = app.Simulation(modeller.topology, system, integrator, platform)
+     simulation.context.setPositions(modeller.positions)
+ 
+     # Minimize the energy
+@@ -340,12 +346,17 @@ def strained_sidechain_bonds_fixer(strained_residues, topology, positions, n_thr
+     integrator = LangevinIntegrator(0, 0.01, 0.0)
+ 
+     # Set up the simulation
++    # SDAA 适配：平台改为按可用性解析（auto: CUDA -> CPU -> SDAA -> Reference），
++    # 并把解析提到分支之外、在两个分支都显式传入，使 IMMUNEBUILDER_OPENMM_PLATFORM
++    # 在 n_threads<=0 时同样生效（上游此时不传平台，交由 OpenMM 自选，无法受控）。
++    platform = resolve_openmm_platform()
+     if n_threads > 0:
+         # Set number of threads used by OpenMM
+-        platform = Platform.getPlatformByName('CPU')
+-        simulation = app.Simulation(modeller.topology, system, integrator, platform, {'Threads', str(n_threads)})
++        # 'Threads' 属性只被 CPU 平台识别，仅在该平台上传递。
++        simulation = app.Simulation(modeller.topology, system, integrator, platform,
++                                    {'Threads': str(n_threads)} if platform.getName() == "CPU" else {})
+     else:
+-        simulation = app.Simulation(modeller.topology, system, integrator)    
++        simulation = app.Simulation(modeller.topology, system, integrator, platform)
+     simulation.context.setPositions(modeller.positions)
+ 
+     # Minimize the energy

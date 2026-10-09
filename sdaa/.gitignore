@@ -1,0 +1,24 @@
+# 主机相关，不入库
+.env.sdaa
+
+# 可完全再生的输入（scripts/download-deps.sh / download-weights.sh 获取）
+downloads/
+weights/
+
+# 运行产物
+work/
+logs/
+backups/
+
+# Python
+__pycache__/
+*.pyc
+
+# 构建副产物
+build/
+*.egg-info/
+dist/
+
+# 不随仓库分发 wheel：三个依赖均可 pip install，
+# 且 ImmuneBuilder 源码就在本仓库内。
+wheels/*.whl
